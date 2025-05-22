@@ -78,9 +78,14 @@ ip netns exec $SCONE_USER_NS ping -c 3 $CAP_IP
 
 # Attach eBPF programs.
 echo "=== Starting eBPF SCONE programs and packet capture."
-ip netns exec $SCONE_CSP1_NS python3 scone.py $CSP_USER_LINK add_scone_ebpf & scone_pid1=$!
-ip netns exec $SCONE_CSP2_NS python3 scone.py $CSP_CSP_2_LINK modify_scone_ebpf & scone_pid2=$!
-ip netns exec $SCONE_CAP_NS python3 scone.py $CSP_USER_LINK remove_scone_ebpf & scone_pid3=$!
+#ip netns exec $SCONE_CSP1_NS python3 scone.py $CSP_USER_LINK add_scone_ebpf & scone_pid1=$!
+#ip netns exec $SCONE_CSP2_NS python3 scone.py $CSP_CSP_2_LINK modify_scone_ebpf & scone_pid2=$!
+#ip netns exec $SCONE_CAP_NS python3 scone.py $CAP_CSP_LINK remove_scone_ebpf & scone_pid3=$!
+ip netns exec $SCONE_CSP2_NS python3 scone.py $CSP_CAP_LINK add_scone_ebpf & scone_pid3=$!
+#ip netns exec $SCONE_CSP1_NS python3 scone.py $CSP_CSP_1_LINK modify_scone_ebpf & scone_pid2=$!
+#ip netns exec $SCONE_USER_NS python3 scone.py $USER_CSP_LINK remove_scone_ebpf & scone_pid1=$!
+ip netns exec $SCONE_CSP1_NS python3 scone.py $CSP_CSP_1_LINK remove_scone_ebpf & scone_pid2=$!
+ip netns exec $SCONE_USER_NS python3 scone.py $USER_CSP_LINK modify_scone_ebpf & scone_pid1=$!
 ip netns exec $SCONE_USER_NS tcpdump -U -n -w user.pcap -i $USER_CSP_LINK & dump_pid1=$!
 ip netns exec $SCONE_CSP1_NS tcpdump -U -n -w csp1.pcap -i $CSP_CSP_1_LINK & dump_pid2=$!
 ip netns exec $SCONE_CSP2_NS tcpdump -U -n -w csp2.pcap -i $CSP_CSP_2_LINK & dump_pid3=$!
@@ -124,10 +129,12 @@ kill -9 $nc_pid
 kill -9 $hqs1_pid
 sleep 2
 kill -9 $hqs2_pid
-echo "  Stopping User->CAP1 eBPF program."
+echo "  Stopping User->CSP1 eBPF program."
 kill -2 $scone_pid1
+sleep 2
 echo "  Stopping CSP1->CSP2 eBPF program."
 kill -2 $scone_pid2
+sleep 2
 echo "  Stopping CSP2->CAP eBPF program."
 kill -2 $scone_pid3
 sleep 2

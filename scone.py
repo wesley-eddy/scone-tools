@@ -15,15 +15,35 @@ b.attach_xdp(device, fn, 0)
 
 def signal_handler(sig, frame):
     print("Getting counters.")
+    print("  Result types:")
     dist = b.get_table("counters")
-    print(f"   {len(dist.items())} counters.")
     for k, v in dist.items():
-        print("TYPE : %10d, COUNT : %10d" % (k.value, v.value))
-    print("")
+        print("    TYPE : %10d, COUNT : %10d" % (k.value, v.value))
+
+    print("\n  Ports:")
     dist = b.get_table("ports")
     for k, v in dist.items():
-        print("PORT : %10d, COUNT : %10d" % (k.value, v.value))
+        print("    PORT : %10d, COUNT : %10d" % (k.value, v.value))
 
+    print("\n  First Bytes:")
+    dist = b.get_table("firstbyte")
+    for k, v in dist.items():
+        print("    BYTE : %10d, COUNT : %10d" % (k.value, v.value))
+
+    print("\n  QUIC Versions:")
+    dist = b.get_table("versions")
+    for k, v in dist.items():
+        print("    VERSION : %10d, COUNT : %10d" % (k.value, v.value))
+
+    print("\n  Connection ID Lengths:")
+    if operation == "add_scone_ebpf":
+        dist = b.get_table("scidlens")
+        for x, y in dist.items():
+            print("    SCIDLEN : %10d, COUNT : %10d" % (x.value, y.value))
+        dist = b.get_table("dcidlens")
+        for x, y in dist.items():
+            print("    DCIDLEN : %10d, COUNT : %10d" % (x.value, y.value))
+    
     b.remove_xdp(device, 0)
     print(f"Detached from {device}.")
 
