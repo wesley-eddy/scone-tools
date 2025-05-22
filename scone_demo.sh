@@ -53,7 +53,7 @@ NON_SCONE_PORT=20000
 SCONE_PORT=30000
 
 # hq wants to use /tmp/logs.
-mkdir /tmp/logs
+mkdir -p /tmp/logs
 
 
 # Create and connect network namespaces.
@@ -103,6 +103,7 @@ ip netns exec $SCONE_CSP2_NS python3 scone.py $CSP_CAP_LINK add_scone_ebpf & sco
 #ip netns exec $SCONE_USER_NS python3 scone.py $USER_CSP_LINK remove_scone_ebpf & scone_pid1=$!
 ip netns exec $SCONE_CSP1_NS python3 scone.py $CSP_CSP_1_LINK remove_scone_ebpf & scone_pid2=$!
 ip netns exec $SCONE_USER_NS python3 scone.py $USER_CSP_LINK modify_scone_ebpf & scone_pid1=$!
+mkdir -p pcap
 ip netns exec $SCONE_USER_NS tcpdump -U -n -w pcap/user.pcap -i $USER_CSP_LINK & dump_pid1=$!
 ip netns exec $SCONE_CSP1_NS tcpdump -U -n -w pcap/csp1.pcap -i $CSP_CSP_1_LINK & dump_pid2=$!
 ip netns exec $SCONE_CSP2_NS tcpdump -U -n -w pcap/csp2.pcap -i $CSP_CSP_2_LINK & dump_pid3=$!
