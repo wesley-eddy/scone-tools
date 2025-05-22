@@ -1,16 +1,33 @@
 #!/bin/bash
 #
+# Demonstration script for basic SCONE testing:
+# - Creates a number of network namespaces and connects them (see diagram
+#   below).
+# - Installs eBPF modules to add, modify, or remove SCONE packets to UDP
+#   datagrams with other QUIC packets to/from specific ports.
+# - Starts QUIC transfers on different ports in order to generate test
+#   traffic.
+# - Collects PCAP captures for analysis.
+# - Prints summary information.
+#
 # +------+       +------+    +------+       +-----+
 # | USER +-------+ CSP1 +----+ CSP2 +-------+ CAP |
 # +------+       +------+    +------+       +-----+
-#         ^     ^        ^  ^        ^     ^
-#         |     |        |  |        |     |
-#    =====|====>A===========>M============>R 
-#         R<============M<==========A<=========
+# client  ^     ^        ^  ^        ^     ^
+# packet  |     |        |  |        |     |
+#   flow  |     |        |  |        |     |  server
+#    >====|====>A===========>M============>R  packet
+#         |              |           |        flow
+#         R<============M<==========A<========<
 #
 # A: SCONE added
 # M: SCONE modified
 # R: SCONE removed
+#
+# Plans / TODO:
+# - Add traffic limiting (tc) to a specific rate, and make the SCONE
+#   signal correspond.
+# - Add ABR video traffic.
 
 SCONE_USER_NS=SCONE_USER
 SCONE_CSP1_NS=SCONE_CSP1
@@ -86,10 +103,10 @@ ip netns exec $SCONE_CSP2_NS python3 scone.py $CSP_CAP_LINK add_scone_ebpf & sco
 #ip netns exec $SCONE_USER_NS python3 scone.py $USER_CSP_LINK remove_scone_ebpf & scone_pid1=$!
 ip netns exec $SCONE_CSP1_NS python3 scone.py $CSP_CSP_1_LINK remove_scone_ebpf & scone_pid2=$!
 ip netns exec $SCONE_USER_NS python3 scone.py $USER_CSP_LINK modify_scone_ebpf & scone_pid1=$!
-ip netns exec $SCONE_USER_NS tcpdump -U -n -w user.pcap -i $USER_CSP_LINK & dump_pid1=$!
-ip netns exec $SCONE_CSP1_NS tcpdump -U -n -w csp1.pcap -i $CSP_CSP_1_LINK & dump_pid2=$!
-ip netns exec $SCONE_CSP2_NS tcpdump -U -n -w csp2.pcap -i $CSP_CSP_2_LINK & dump_pid3=$!
-ip netns exec $SCONE_CAP_NS tcpdump -U -n -w cap.pcap -i $CAP_CSP_LINK & dump_pid4=$!
+ip netns exec $SCONE_USER_NS tcpdump -U -n -w pcap/user.pcap -i $USER_CSP_LINK & dump_pid1=$!
+ip netns exec $SCONE_CSP1_NS tcpdump -U -n -w pcap/csp1.pcap -i $CSP_CSP_1_LINK & dump_pid2=$!
+ip netns exec $SCONE_CSP2_NS tcpdump -U -n -w pcap/csp2.pcap -i $CSP_CSP_2_LINK & dump_pid3=$!
+ip netns exec $SCONE_CAP_NS tcpdump -U -n -w pcap/cap.pcap -i $CAP_CSP_LINK & dump_pid4=$!
 echo "  Waiting 10 seconds."
 sleep 10
 
