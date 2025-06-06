@@ -40,7 +40,8 @@ There is a shell script included that:
 
 - Creates a number of network namespaces and interconnects them.
 - Installs eBPF code to add, modify, and remove SCONE packets on interfaces within the test network namespaces.
-  + The code is only setup to work with SCONE on specific UDP ports, and other QUIC traffic or UDP traffic on other ports will not be impacted.
+    + The code is only setup to work with SCONE on specific UDP ports, and other QUIC traffic or UDP traffic on other ports will not be impacted.
 - Starts some transfers using 'hq' on different ports to generate QUIC traffic.
 - Collects tcpdump PCAP captures at different points in the network.
+    - You can observe 15 bytes packet size differences in UDP payloads at different points in the path, and see that the contents correspond to SCONE packets.
 - Prints some counters that help to see what the SCONE eBPF code did.

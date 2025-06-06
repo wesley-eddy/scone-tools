@@ -13,7 +13,8 @@ BPF_HISTOGRAM(ports, u64);
 BPF_HISTOGRAM(scidlens, u64);
 BPF_HISTOGRAM(dcidlens, u64);
 BPF_HISTOGRAM(versions, u64);
-BPF_HISTOGRAM(firstbyte, u64); // XXX
+// TODO: Remove later, this is just for recording first byte values received.
+BPF_HISTOGRAM(firstbyte, u64);
 const u64 TOO_SMALL_COUNTER = 0;
 const u64 NOT_UDP_COUNTER = 1;
 const u64 NOT_SCONE_PORT_COUNTER = 2;
@@ -76,6 +77,7 @@ static inline void ipv4_csum(void *data_start, int data_size,  __u64 *csum) {
   *csum = csum_fold_helper(*csum);
 }
 
+// TODO: This fails verifier checks.
 __attribute__((__always_inline__))
 static inline void ipv4_l4_csum(void *data_start, __u32 data_size,
                                 __u64 *csum, struct iphdr *iph) {
@@ -117,8 +119,9 @@ static __always_inline u64 check_quic(void *data, void *data_end) {
     if (port != SCONE_PORT)
         return NOT_SCONE_PORT_COUNTER;
 
-    port = quic[0]; // XXX
-    firstbyte.increment(port); // XXX
+    // TODO: Remove later, this is just for seeing what is received.
+    port = quic[0];
+    firstbyte.increment(port);
 
     // Check for QUIC packet in contents.
     if ((quic[0] & 0x80) != 0x80)
@@ -246,13 +249,10 @@ int add_scone_ebpf(struct xdp_md *ctx) {
     if ((u8*)udp + sizeof(*udp) >= new_data_end) return XDP_ABORTED;
     udp->len = bpf_htons(bpf_ntohs(udp->len) + sizeof(*scone));
 
-    //__s64 csum_diff = bpf_csum_diff(0, 0, (void*)scone, sizeof(*scone), udp->check);
-    //if (csum_diff < 0) return XDP_ABORTED;
-    //__u64 cs = 0;
-    //udp->check = 0;
-    //if ((void*)iph + sizeof(*iph) >= (void*)(long)ctx->data_end) return XDP_PASS; // Impossible.
-    //ipv4_l4_csum(udp, udp->len, &cs, iph);
-    //udp->check = cs;
+    // Update UDP checksum based on added bytes.
+    s64 csum = bpf_csum_diff(0, 0, (void*)scone, sizeof(*scone), udp->check);
+    udp->check = csum;
+
     udp->check = 0; // TODO: Get UDP checksum update working.
 
     result = SCONE_ADDED_COUNTER;
@@ -280,9 +280,14 @@ int modify_scone_ebpf(struct xdp_md *ctx) {
     struct sconepkt *scone = (void *)udp + sizeof(*udp);
 
     // As a test, just cut the rate signal in half.
+    u8 orig_rate_signal = scone->rate_signal;
     scone->rate_signal = 0x80 | ((scone->rate_signal & 0x7F)/2);
 
-    // TODO: UDP checksum needs to be updated, if not zero.
+    // UDP checksum needs to be updated, if not zero.
+    u16 orig = (((u16)orig_rate_signal)<<8) |
+               ((scone->version & 0xFF000000)>>16);
+    u16 delta_csum = ((u16*)scone)[0] + ~orig;
+    udp->check = udp->check + ~delta_csum;
 
     result = SCONE_MODIFIED_COUNTER;
     counters.increment(result);
