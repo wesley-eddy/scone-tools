@@ -156,7 +156,8 @@ static __always_inline u64 check_quic(void *data, void *data_end) {
     }
     if (!known_version) {
         if (quic_version == SCONE_V1 || quic_version == SCONE_V2)
-            return SCONE_IPV4_COUNTER;
+            return (ipproto == ETH_P_IP) ? SCONE_IPV4_COUNTER
+                                         : SCONE_IPV6_COUNTER;
         return UNKNOWN_QUIC_VERSION;
     }
 
@@ -283,15 +284,18 @@ int modify_scone_ebpf(struct xdp_md *ctx) {
     u64 result = check_quic(data, data_end);
 
     // Ignore anything that isn't a SCONE packet.
-    if (result != SCONE_IPV4_COUNTER) {
+    if (result != SCONE_IPV4_COUNTER && result != SCONE_IPV6_COUNTER) {
         counters.increment(result);
         return XDP_PASS;
     }
 
     struct ethhdr *eth = data;
     struct iphdr *ip = (void *)eth + sizeof(*eth);
+    struct ipv6hdr *ip6 = (void *)ip;
     struct udphdr *udp = (void *)ip + sizeof(*ip);
+    if (result == SCONE_IPV6_COUNTER) udp = (void*)ip6 + sizeof(*ip6);
     struct sconepkt *scone = (void *)udp + sizeof(*udp);
+    if ((void*)scone + sizeof(*scone) >= data_end) return XDP_PASS;
 
     // As a test, just cut the rate signal in half.
     u8 orig_rate_signal = scone->rate_signal;
