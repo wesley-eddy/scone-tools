@@ -1,10 +1,15 @@
-// TODO: Only IPv4 is handled, not IPv6.
-// TODO: This adds SCONE to all UDP packets that seem to have QUIC long header
-//       with a known version number.
+// This contains 3 eBPF functions that can be attached to network devices:
+// 1. add_scone_ebpf - attempts to insert SCONE packets into QUIC packets.
+// 2. remove_scone_ebpf - attempts to remove SCONE packets from QUIC packets.
+// 3. modify_scone_ebpf - rewrites SCONE rate guidance in SCONE packets.
+//
+// All of these only operate on designated UDP ports, controlled by the
+// "SCONE_PORT" constant compiled-in..
 
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
+#include <linux/ipv6.h>
 #include <linux/udp.h>
 
 // Collection of u64 counters about observed and modified packets.
@@ -13,20 +18,25 @@ BPF_HISTOGRAM(ports, u64);
 BPF_HISTOGRAM(scidlens, u64);
 BPF_HISTOGRAM(dcidlens, u64);
 BPF_HISTOGRAM(versions, u64);
+
 // TODO: Remove later, this is just for recording first byte values received.
 BPF_HISTOGRAM(firstbyte, u64);
+
+// These are different types of events that are tallied.
 const u64 TOO_SMALL_COUNTER = 0;
 const u64 NOT_UDP_COUNTER = 1;
 const u64 NOT_SCONE_PORT_COUNTER = 2;
 const u64 NOT_QUIC_LONG_COUNTER = 3;
 const u64 UNKNOWN_QUIC_VERSION = 4;
-const u64 QUIC_LONG_COUNTER = 5;
-const u64 OTHER_ERROR_COUNTER = 6;
-const u64 SCONE_COUNTER = 7;
-const u64 SCONE_ADDED_COUNTER = 8;
-const u64 CONN_ID_LEN = 9;
-const u64 SCONE_REMOVED_COUNTER = 10;
-const u64 SCONE_MODIFIED_COUNTER = 11;
+const u64 QUIC_IPV4_LONG_COUNTER = 5;
+const u64 QUIC_IPV6_LONG_COUNTER = 6;
+const u64 OTHER_ERROR_COUNTER = 7;
+const u64 SCONE_IPV4_COUNTER = 8;
+const u64 SCONE_IPV6_COUNTER = 9;
+const u64 SCONE_ADDED_COUNTER = 10;
+const u64 CONN_ID_LEN = 11;
+const u64 SCONE_REMOVED_COUNTER = 12;
+const u64 SCONE_MODIFIED_COUNTER = 13;
 
 // To work with the eBPF validator, packet lengths need to be checked against
 // constants, so 8 bytes of connection ID is assumed here, as used by hq.
@@ -94,19 +104,23 @@ static inline void ipv4_l4_csum(void *data_start, __u32 data_size,
 
 // Classify the input packet to determine if it should be worked on.
 static __always_inline u64 check_quic(void *data, void *data_end) {
+    // First check for either IPv4 or IPv6.
     struct ethhdr *eth = data;
+    u16 ipproto = bpf_ntohs(eth->h_proto);
     struct iphdr *ip = (void *)eth + sizeof(*eth);
+    struct ipv6hdr *ip6 = (void *)ip;
     struct udphdr *udp = (void *)ip + sizeof(*ip);
+    if (ipproto == ETH_P_IPV6) udp = (void *)ip6 + sizeof(*ip);
     char *quic = (char *)udp + sizeof(*udp);
-    u64 port;
+    u16 port; // TODO: why is this u64 instead of u16?
 
     // Pass through if it's too small to be a QUIC packet.
-    if ((void *)udp + sizeof(*udp) >= data_end)
+    if ((void*)quic >= data_end)
         return TOO_SMALL_COUNTER;
 
     // Pass through if it's not an IP + UDP packet.
-    if ((bpf_ntohs(eth->h_proto) != ETH_P_IP) ||
-        (ip->protocol != IPPROTO_UDP)) {
+    if (((ipproto != ETH_P_IP) || (ip->protocol != IPPROTO_UDP)) &&
+        ((ipproto != ETH_P_IPV6) || (ip6->nexthdr != IPPROTO_UDP))) {
         return NOT_UDP_COUNTER;
     }
 
@@ -142,12 +156,12 @@ static __always_inline u64 check_quic(void *data, void *data_end) {
     }
     if (!known_version) {
         if (quic_version == SCONE_V1 || quic_version == SCONE_V2)
-            return SCONE_COUNTER;
+            return SCONE_IPV4_COUNTER;
         return UNKNOWN_QUIC_VERSION;
     }
 
     // If the checks made it all the way here, it's QUIC.
-    return QUIC_LONG_COUNTER;
+    return QUIC_IPV4_LONG_COUNTER;
 }
 
 // This is hooked to receive all packets, so first it needs to check whether
@@ -166,7 +180,7 @@ int add_scone_ebpf(struct xdp_md *ctx) {
     u8 src_conn_id_len, dst_conn_id_len;
 
     u64 result = check_quic(data, data_end);
-    if (result != QUIC_LONG_COUNTER) {
+    if (result != QUIC_IPV4_LONG_COUNTER) {
         counters.increment(result);
         return XDP_PASS;
     }
@@ -269,7 +283,7 @@ int modify_scone_ebpf(struct xdp_md *ctx) {
     u64 result = check_quic(data, data_end);
 
     // Ignore anything that isn't a SCONE packet.
-    if (result != SCONE_COUNTER) {
+    if (result != SCONE_IPV4_COUNTER) {
         counters.increment(result);
         return XDP_PASS;
     }
@@ -302,7 +316,7 @@ int remove_scone_ebpf(struct xdp_md *ctx) {
     u64 result = check_quic(data, data_end);
 
     // If it doesn't look like SCONE, ignore it.
-    if (result != SCONE_COUNTER) {
+    if (result != SCONE_IPV4_COUNTER) {
         counters.increment(result);
         return XDP_PASS;
     }

@@ -10,7 +10,7 @@ operation = sys.argv[2]
 
 b = BPF(src_file="scone_ebpf.c")
 fn = b.load_func(operation, BPF.XDP)
-print(f"  Attaching SCONE packets to QUIC on device {device}.")
+print(f"  Attaching '{operation}' for incoming packets on device {device}.")
 b.attach_xdp(device, fn, 0)
 
 def signal_handler(sig, frame):
