@@ -11,7 +11,7 @@
 # - Prints summary information.
 #
 # +------+       +------+    +------+       +-----+
-# | USER +-------+ CSP1 +----+ CSP2 +-------+ CAP |
+# | USER +<----->+ CSP1 +<-->+ CSP2 +<----->+ CAP |
 # +------+       +------+    +------+       +-----+
 # client  ^     ^        ^  ^        ^     ^
 # packet  |     |        |  |        |     |
@@ -99,10 +99,13 @@ echo "=== Starting eBPF SCONE programs and packet capture."
 #ip netns exec $SCONE_CSP2_NS python3 scone.py $CSP_CSP_2_LINK modify_scone_ebpf & scone_pid2=$!
 #ip netns exec $SCONE_CAP_NS python3 scone.py $CAP_CSP_LINK remove_scone_ebpf & scone_pid3=$!
 ip netns exec $SCONE_CSP2_NS python3 scone.py $CSP_CAP_LINK add_scone_ebpf & scone_pid3=$!
-#ip netns exec $SCONE_CSP1_NS python3 scone.py $CSP_CSP_1_LINK modify_scone_ebpf & scone_pid2=$!
-#ip netns exec $SCONE_USER_NS python3 scone.py $USER_CSP_LINK remove_scone_ebpf & scone_pid1=$!
-ip netns exec $SCONE_CSP1_NS python3 scone.py $CSP_CSP_1_LINK remove_scone_ebpf & scone_pid2=$!
-ip netns exec $SCONE_USER_NS python3 scone.py $USER_CSP_LINK modify_scone_ebpf & scone_pid1=$!
+ip netns exec $SCONE_CSP1_NS python3 scone.py $CSP_CSP_1_LINK modify_scone_ebpf & scone_pid2=$!
+ip netns exec $SCONE_USER_NS python3 scone.py $USER_CSP_LINK remove_scone_ebpf & scone_pid1=$!
+#ip netns exec $SCONE_CSP1_NS python3 scone.py $CSP_CSP_1_LINK remove_scone_ebpf & scone_pid2=$!
+#ip netns exec $SCONE_USER_NS python3 scone.py $USER_CSP_LINK modify_scone_ebpf & scone_pid1=$!
+
+
+# Capture packets.
 mkdir -p pcap
 ip netns exec $SCONE_USER_NS tcpdump -U -n -w pcap/user.pcap -i $USER_CSP_LINK & dump_pid1=$!
 ip netns exec $SCONE_CSP1_NS tcpdump -U -n -w pcap/csp1.pcap -i $CSP_CSP_1_LINK & dump_pid2=$!

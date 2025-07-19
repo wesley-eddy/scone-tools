@@ -45,8 +45,8 @@ const int NUM_QUIC_VERSIONS = 9;
 const unsigned short SCONE_PORT = 30000;
 
 // TODO: Redefine these to the actual SCONE values.
-#define SCONE_V1 0x44443333
-#define SCONE_V2 0x33334444
+#define SCONE_V1 0x53434f4E
+#define SCONE_V2 0x4e4f4353
 
 struct sconepkt {
     u8 rate_signal;
