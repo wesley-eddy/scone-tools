@@ -150,13 +150,13 @@ kill -9 $nc_pid
 kill -9 $hqs1_pid
 sleep 2
 kill -9 $hqs2_pid
-echo "  Stopping User->CSP1 eBPF program."
+echo "  Stopping User<-CSP1 eBPF program."
 kill -2 $scone_pid1
 sleep 2
-echo "  Stopping CSP1->CSP2 eBPF program."
+echo "  Stopping CSP1<-CSP2 eBPF program."
 kill -2 $scone_pid2
 sleep 2
-echo "  Stopping CSP2->CAP eBPF program."
+echo "  Stopping CSP2<-CAP eBPF program."
 kill -2 $scone_pid3
 sleep 2
 ip netns del $SCONE_USER_NS
