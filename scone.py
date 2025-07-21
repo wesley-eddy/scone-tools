@@ -11,7 +11,7 @@ operation = sys.argv[2]
 b = BPF(src_file="scone_ebpf.c")
 fn = b.load_func(operation, BPF.XDP)
 print(f"  Attaching '{operation}' for incoming packets on device {device}.")
-b.attach_xdp(device, fn, 0)
+b.attach_xdp(device, fn, BPF.XDP_FLAGS_SKB_MODE)
 
 def signal_handler(sig, frame):
     print("Getting counters.")

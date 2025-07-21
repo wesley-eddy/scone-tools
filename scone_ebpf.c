@@ -52,7 +52,7 @@ const u32 quic_versions[] = { 0x00000000, 0x00000001,
 const int NUM_QUIC_VERSIONS = 9;
 
 // This is a hard-coded destination UDP port number to add SCONE packets for.
-const unsigned short SCONE_PORT = 30000;
+const unsigned short SCONE_PORT = 60000;
 
 // TODO: Redefine these to the actual SCONE values.
 #define SCONE_V1 0x53434f4E
@@ -112,7 +112,7 @@ static __always_inline u64 check_quic(void *data, void *data_end) {
     struct udphdr *udp = (void *)ip + sizeof(*ip);
     if (ipproto == ETH_P_IPV6) udp = (void *)ip6 + sizeof(*ip);
     char *quic = (char *)udp + sizeof(*udp);
-    u16 port; // TODO: why is this u64 instead of u16?
+    u16 port;
 
     // Pass through if it's too small to be a QUIC packet.
     if ((void*)quic >= data_end)

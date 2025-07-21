@@ -50,7 +50,7 @@ CAP_IP=10.0.31.2
 
 PLAIN_UDP_PORT=10000
 NON_SCONE_PORT=20000
-SCONE_PORT=30000
+SCONE_PORT=60000
 
 # hq wants to use /tmp/logs.
 mkdir -p /tmp/logs
