@@ -54,9 +54,9 @@ const int NUM_QUIC_VERSIONS = 9;
 // This is a hard-coded destination UDP port number to add SCONE packets for.
 const unsigned short SCONE_PORT = 60000;
 
-// TODO: Redefine these to the actual SCONE values.
-#define SCONE_V1 0x53434f4E
-#define SCONE_V2 0x4e4f4353
+// These are the SCONE versions in version -03 of the protocol spec.
+#define SCONE_V1 0x6f7dc0fd
+#define SCONE_V2 0xef7dc0fd
 
 struct sconepkt {
     u8 rate_signal;
