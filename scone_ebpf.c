@@ -51,8 +51,11 @@ const u32 quic_versions[] = { 0x00000000, 0x00000001,
                               0xfaceb001, 0xfaceb002 };
 const int NUM_QUIC_VERSIONS = 9;
 
-// This is a hard-coded destination UDP port number to add SCONE packets for.
-const unsigned short SCONE_PORT = 60000;
+// These are hard-coded destination UDP port numbers to add SCONE packets for.
+const unsigned short SCONE_PORT_IPV4 = 60000;
+const unsigned short SCONE_PORT_IPV6 = 60001;
+const unsigned short NON_SCONE_PORT_IPV4 = 20000;
+const unsigned short NON_SCONE_PORT_IPV6 = 20001;
 
 // These are the SCONE versions in version -03 of the protocol spec.
 #define SCONE_V1 0x6f7dc0fd
@@ -125,12 +128,30 @@ static __always_inline u64 check_quic(void *data, void *data_end) {
     struct ethhdr *eth = data;
     u16 ipproto = bpf_ntohs(eth->h_proto);
     struct iphdr *ip = (void *)eth + sizeof(*eth);
-    struct ipv6hdr *ip6 = (void *)ip;
-    struct udphdr *udp = (void *)ip + sizeof(*ip);
-    if (ipproto == ETH_P_IPV6) udp = (void *)ip6 + sizeof(*ip);
-    char *quic = (char *)udp + sizeof(*udp);
+    struct ipv6hdr *ip6 = (void *)eth + sizeof(*eth);
+    struct udphdr *udp;
+    char *quic;
     u16 port;
-
+    
+    // Bounds check for Ethernet header
+    if ((void *)eth + sizeof(*eth) > data_end)
+        return TOO_SMALL_COUNTER;
+    
+    // Set UDP pointer based on IP version with proper bounds checking
+    if (ipproto == ETH_P_IPV6) {
+        // IPv6: Ethernet + IPv6 header + UDP header
+        if ((void *)ip6 + sizeof(*ip6) + sizeof(struct udphdr) > data_end)
+            return TOO_SMALL_COUNTER;
+        udp = (void *)ip6 + sizeof(*ip6);
+    } else {
+        // IPv4: Ethernet + IPv4 header + UDP header  
+        if ((void *)ip + sizeof(*ip) + sizeof(struct udphdr) > data_end)
+            return TOO_SMALL_COUNTER;
+        udp = (void *)ip + sizeof(*ip);
+    }
+    
+    quic = (char *)udp + sizeof(*udp);
+    
     // Pass through if it's too small to be a QUIC packet.
     if ((void*)quic >= data_end)
         return TOO_SMALL_COUNTER;
@@ -146,8 +167,9 @@ static __always_inline u64 check_quic(void *data, void *data_end) {
     port = bpf_ntohs(udp->source);
     ports.increment(port);
 
-    // Pass through if the UDP destination port isn't configured for SCONE.
-    if (port != SCONE_PORT)
+    // Pass through if the UDP source port isn't configured for SCONE or non-SCONE testing.
+    if (port != SCONE_PORT_IPV4 && port != SCONE_PORT_IPV6 && 
+        port != NON_SCONE_PORT_IPV4 && port != NON_SCONE_PORT_IPV6)
         return NOT_SCONE_PORT_COUNTER;
 
     // TODO: Remove later, this is just for seeing what is received.
@@ -179,7 +201,7 @@ static __always_inline u64 check_quic(void *data, void *data_end) {
     }
 
     // If the checks made it all the way here, it's QUIC.
-    return QUIC_IPV4_LONG_COUNTER;
+    return (ipproto == ETH_P_IP) ? QUIC_IPV4_LONG_COUNTER : QUIC_IPV6_LONG_COUNTER;
 }
 
 // This is hooked to receive all packets, so first it needs to check whether
@@ -191,14 +213,45 @@ int add_scone_ebpf(struct xdp_md *ctx) {
 
     struct ethhdr *eth = data;
     struct iphdr *ip = (void *)eth + sizeof(*eth);
-    struct udphdr *udp = (void *)ip + sizeof(*ip);
-
-    size_t lower_hdrlen = sizeof(*eth) + sizeof(*ip) + sizeof(*udp);
-    u8 *quic = data + lower_hdrlen;
+    struct ipv6hdr *ip6 = (void *)eth + sizeof(*eth);
+    struct udphdr *udp;
+    size_t lower_hdrlen;
+    u8 *quic;
     u8 src_conn_id_len, dst_conn_id_len;
 
     u64 result = check_quic(data, data_end);
-    if (result != QUIC_IPV4_LONG_COUNTER) {
+    if (result != QUIC_IPV4_LONG_COUNTER && result != QUIC_IPV6_LONG_COUNTER) {
+        counters.increment(result);
+        return XDP_PASS;
+    }
+    
+    // Set header pointers and lengths based on IP version with bounds checking
+    if (result == QUIC_IPV6_LONG_COUNTER) {
+        // IPv6 packet - need to re-verify bounds for IPv6 header access
+        if ((void *)ip6 + sizeof(*ip6) + sizeof(struct udphdr) > data_end)
+            return XDP_PASS;
+        udp = (void*)ip6 + sizeof(*ip6);
+        lower_hdrlen = sizeof(*eth) + sizeof(*ip6) + sizeof(*udp);
+        quic = data + lower_hdrlen;
+        // Verify QUIC payload is accessible
+        if (quic >= (u8*)data_end)
+            return XDP_PASS;
+    } else {
+        // IPv4 packet  
+        if ((void *)ip + sizeof(*ip) + sizeof(struct udphdr) > data_end)
+            return XDP_PASS;
+        udp = (void *)ip + sizeof(*ip);
+        lower_hdrlen = sizeof(*eth) + sizeof(*ip) + sizeof(*udp);
+        quic = data + lower_hdrlen;
+        // Verify QUIC payload is accessible
+        if (quic >= (u8*)data_end)
+            return XDP_PASS;
+    }
+    
+    // Only add SCONE to SCONE-enabled ports, pass through non-SCONE test traffic
+    u16 src_port = bpf_ntohs(udp->source);
+    if (src_port == NON_SCONE_PORT_IPV4 || src_port == NON_SCONE_PORT_IPV6) {
+        // Pass through non-SCONE test traffic without modification
         counters.increment(result);
         return XDP_PASS;
     }
@@ -250,7 +303,14 @@ int add_scone_ebpf(struct xdp_md *ctx) {
     u8 *new_data_end = (u8 *)(long)ctx->data_end;
     if (new_data + lower_hdrlen > new_data_end) return XDP_ABORTED;
     if (new_data + delta + lower_hdrlen > new_data_end) return XDP_ABORTED;
-    __builtin_memmove(new_data, new_data+delta, lower_hdrlen);
+    // Manual byte-by-byte copy to avoid memmove (supports both IPv4 and IPv6)
+    // IPv4 headers: 14+20+8=42, IPv6 headers: 14+40+8=62
+    int max_hdr_len = (result == QUIC_IPV6_LONG_COUNTER) ? 62 : 42;
+    if (lower_hdrlen <= max_hdr_len && new_data + lower_hdrlen < new_data_end && new_data + delta + lower_hdrlen < new_data_end) {
+        for (int i = 0; i < max_hdr_len && i < lower_hdrlen; i++) {
+            new_data[i] = new_data[delta + i];
+        }
+    }
 
     // Fill in SCONE packet.
     eth = (void*)(long)ctx->data;
@@ -268,14 +328,32 @@ int add_scone_ebpf(struct xdp_md *ctx) {
     if ((u8*)&(scone->dst_conn_id) + QUIC_CONN_ID_LEN >= new_data_end) return XDP_ABORTED;
     u8 *dst_conn_id = new_data + lower_hdrlen + sizeof(*scone) + 7;
     if ((u8*)dst_conn_id + QUIC_CONN_ID_LEN >= new_data_end) return XDP_ABORTED;
-    __builtin_memmove(&scone->dst_conn_id, dst_conn_id, QUIC_CONN_ID_LEN);
+    // Manual copy to avoid memmove issues (QUIC_CONN_ID_LEN = 8)
+    if ((u8*)&(scone->dst_conn_id[0]) + 8 < new_data_end && dst_conn_id + 8 < new_data_end) {
+        scone->dst_conn_id[0] = dst_conn_id[0];
+        scone->dst_conn_id[1] = dst_conn_id[1];
+        scone->dst_conn_id[2] = dst_conn_id[2];
+        scone->dst_conn_id[3] = dst_conn_id[3];
+        scone->dst_conn_id[4] = dst_conn_id[4];
+        scone->dst_conn_id[5] = dst_conn_id[5];
+        scone->dst_conn_id[6] = dst_conn_id[6];
+        scone->dst_conn_id[7] = dst_conn_id[7];
+    }
 
-    // Fix up IP header to reflect new length.
-    if ((u8*)ip + sizeof(*ip) >= new_data_end) return XDP_ABORTED;
-    ip->tot_len = bpf_htons(bpf_ntohs(ip->tot_len) + sizeof(*scone));
-    __u64 cs = ip->check = 0;
-    ipv4_csum(ip, sizeof(*ip), &cs);
-    ip->check = cs;
+    // Fix up IP header to reflect new length (different for IPv4 vs IPv6).
+    if (result == QUIC_IPV4_LONG_COUNTER) {
+        if ((u8*)ip + sizeof(*ip) >= new_data_end) return XDP_ABORTED;
+        ip->tot_len = bpf_htons(bpf_ntohs(ip->tot_len) + sizeof(*scone));
+        __u64 cs = ip->check = 0;
+        ipv4_csum(ip, sizeof(*ip), &cs);
+        ip->check = cs;
+    } else {
+        // IPv6 case
+        struct ipv6hdr *ip6 = (void*)eth + sizeof(*eth);
+        if ((u8*)ip6 + sizeof(*ip6) >= new_data_end) return XDP_ABORTED;
+        ip6->payload_len = bpf_htons(bpf_ntohs(ip6->payload_len) + sizeof(*scone));
+        // IPv6 has no header checksum
+    }
 
     // Fix up UDP header to reflect new length.
     if ((u8*)udp + sizeof(*udp) >= new_data_end) return XDP_ABORTED;
@@ -339,23 +417,48 @@ int remove_scone_ebpf(struct xdp_md *ctx) {
     u64 result = check_quic(data, data_end);
 
     // If it doesn't look like SCONE, ignore it.
-    if (result != SCONE_IPV4_COUNTER) {
+    if (result != SCONE_IPV4_COUNTER && result != SCONE_IPV6_COUNTER) {
         counters.increment(result);
         return XDP_PASS;
     }
 
     struct ethhdr *eth = data;
     struct iphdr *ip = (void *)eth + sizeof(*eth);
-    struct udphdr *udp = (void *)ip + sizeof(*ip);
+    struct ipv6hdr *ip6 = (void *)eth + sizeof(*eth);
+    struct udphdr *udp;
+    int lower_hdrs_len;
+    
+    // Set header pointers and lengths based on IP version with bounds checking
+    if (result == SCONE_IPV6_COUNTER) {
+        // IPv6 packet - need to re-verify bounds for IPv6 header access
+        if ((void *)ip6 + sizeof(*ip6) + sizeof(struct udphdr) > data_end)
+            return XDP_PASS;
+        udp = (void *)ip6 + sizeof(*ip6);
+        lower_hdrs_len = sizeof(*eth) + sizeof(*ip6) + sizeof(*udp);
+    } else {
+        // IPv4 packet
+        if ((void *)ip + sizeof(*ip) + sizeof(struct udphdr) > data_end)
+            return XDP_PASS;
+        udp = (void *)ip + sizeof(*ip);
+        lower_hdrs_len = sizeof(*eth) + sizeof(*ip) + sizeof(*udp);
+    }
 
     u8 *quic = (u8*)udp + sizeof(*udp);
     u8 src_conn_id_len, dst_conn_id_len;
 
     // Copy the lower headers back, overwriting the SCONE packet.
-    const int lower_hdrs_len = sizeof(*eth) + sizeof(*ip) + sizeof(*udp);
     if (data+sizeof(struct sconepkt)+lower_hdrs_len >= data_end)
         return XDP_ABORTED;
-    __builtin_memmove(data+sizeof(struct sconepkt), data, lower_hdrs_len);
+    // Manual byte-by-byte copy for header removal (supports both IPv4 and IPv6)
+    u8 *src = (u8*)data;
+    u8 *dst = (u8*)data + sizeof(struct sconepkt);
+    // IPv4 headers: 14+20+8=42, IPv6 headers: 14+40+8=62
+    int max_hdr_len = (result == SCONE_IPV6_COUNTER) ? 62 : 42;
+    if (lower_hdrs_len <= max_hdr_len && src + lower_hdrs_len < (u8*)data_end && dst + lower_hdrs_len < (u8*)data_end) {
+        for (int i = 0; i < max_hdr_len && i < lower_hdrs_len; i++) {
+            dst[i] = src[i];
+        }
+    }
     // Adjust the packet length to shrink it.
     if (bpf_xdp_adjust_head(ctx, sizeof(struct sconepkt)) != 0) {
         // TODO: Some kind of error.
@@ -364,18 +467,27 @@ int remove_scone_ebpf(struct xdp_md *ctx) {
         return XDP_PASS;
     }
 
-    // Adjust IP length and checksum values.
+    // Adjust IP length and checksum values (different for IPv4 vs IPv6).
     eth = (void *)(long)ctx->data;
-    ip = (void *)eth + sizeof(*eth);
     data_end = (void *)(long)ctx->data_end;
-    if ((void*)ip + sizeof(*ip) >= data_end) return XDP_ABORTED;
-    ip->tot_len = bpf_htons(bpf_ntohs(ip->tot_len) - sizeof(struct sconepkt));
-    __u64 cs = ip->check = 0;
-    ipv4_csum(ip, sizeof(*ip), &cs);
-    ip->check = cs;
+    
+    if (result == SCONE_IPV4_COUNTER) {
+        ip = (void *)eth + sizeof(*eth);
+        if ((void*)ip + sizeof(*ip) >= data_end) return XDP_ABORTED;
+        ip->tot_len = bpf_htons(bpf_ntohs(ip->tot_len) - sizeof(struct sconepkt));
+        __u64 cs = ip->check = 0;
+        ipv4_csum(ip, sizeof(*ip), &cs);
+        ip->check = cs;
+        udp = (void *)ip + sizeof(*ip);
+    } else {
+        // IPv6 case
+        struct ipv6hdr *ip6 = (void *)eth + sizeof(*eth);
+        if ((void*)ip6 + sizeof(*ip6) >= data_end) return XDP_ABORTED;
+        ip6->payload_len = bpf_htons(bpf_ntohs(ip6->payload_len) - sizeof(struct sconepkt));
+        udp = (void *)ip6 + sizeof(*ip6);
+    }
 
     // Adjust UDP length and checksum values.
-    udp = (void *)ip + sizeof(*ip);
     if ((void*)udp + sizeof(*udp) >= data_end) return XDP_ABORTED;
     udp->len = bpf_htons(bpf_ntohs(udp->len) - sizeof(struct sconepkt));
     if (udp->check != 0) {
