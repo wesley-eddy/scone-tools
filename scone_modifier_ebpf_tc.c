@@ -22,19 +22,6 @@ struct sconepkt
     u32 version;
 } __attribute__((packed));
 
-// Borrowed from: https://gist.github.com/sbernard31/d4fee7518a1ff130452211c0d355b3f7
-__attribute__((__always_inline__)) static inline __u16 csum_fold_helper(__u64 csum)
-{
-    int i;
-#pragma unroll
-    for (i = 0; i < 4; i++)
-    {
-        if (csum >> 16)
-            csum = (csum & 0xffff) + (csum >> 16);
-    }
-    return ~csum;
-}
-
 int modify_scone_ebpf(struct __sk_buff *skb)
 {
     void *data = (void *)(long)skb->data;
