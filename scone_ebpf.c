@@ -69,7 +69,6 @@ struct sconepkt {
 } __attribute__((packed));
 // Note: connection ID lengths and values are not included above.
 
-// Borrowed from: https://gist.github.com/sbernard31/d4fee7518a1ff130452211c0d355b3f7
 __attribute__((__always_inline__))
 static inline __u16 csum_fold_helper(__u64 csum) {
   int i;
@@ -87,19 +86,37 @@ static inline void ipv4_csum(void *data_start, int data_size,  __u64 *csum) {
   *csum = csum_fold_helper(*csum);
 }
 
-// TODO: This fails verifier checks.
-__attribute__((__always_inline__))
-static inline void ipv4_l4_csum(void *data_start, __u32 data_size,
-                                __u64 *csum, struct iphdr *iph) {
-  __u32 tmp = 0;
-  *csum = bpf_csum_diff(0, 0, &iph->saddr, sizeof(__be32), *csum);
-  *csum = bpf_csum_diff(0, 0, &iph->daddr, sizeof(__be32), *csum);
-  tmp = __builtin_bswap32((__u32)(iph->protocol));
-  *csum = bpf_csum_diff(0, 0, &tmp, sizeof(__u32), *csum);
-  tmp = __builtin_bswap32((__u32)(data_size));
-  *csum = bpf_csum_diff(0, 0, &tmp, sizeof(__u32), *csum);
-  *csum = bpf_csum_diff(0, 0, data_start, data_size, *csum);
-  *csum = csum_fold_helper(*csum);
+static __always_inline
+__u16 udp_csum(struct iphdr *iph, struct udphdr *udph, void *data_end)
+{
+    __u64 csum = 0;
+    __u16 udp_len = bpf_ntohs(udph->len);
+
+    // Calculate pseudo-header checksum.
+    csum += iph->saddr >> 16;
+    csum += iph->saddr & 0xffff;
+    csum += iph->daddr >> 16;
+    csum += iph->daddr & 0xffff;
+    csum += bpf_htons(IPPROTO_UDP);
+    csum += bpf_htons(udp_len);
+
+    __u16 *ptr = (__u16 *)udph;
+
+    if (udp_len != (data_end - (void*)udph)) return 0;
+
+    for (int i = 0; i < 4000; i++) { // Loop bound must be constant for the verifier
+        if ((void *)ptr + sizeof(__u16) > data_end) {
+            break;
+        }
+        csum += *ptr;
+        ptr++;
+    }
+    if ((void*)ptr < data_end) csum += *(u8*)ptr;
+    // Note: A loop limit (4000 here) is necessary for the verifier. This limits 
+    // the maximum packet size this function can handle safely. For production, 
+    // ensure this limit covers your max expected packet size.
+
+    return csum_fold_helper(csum);
 }
 
 // Classify the input packet to determine if it should be worked on.
@@ -265,10 +282,11 @@ int add_scone_ebpf(struct xdp_md *ctx) {
     udp->len = bpf_htons(bpf_ntohs(udp->len) + sizeof(*scone));
 
     // Update UDP checksum based on added bytes.
-    s64 csum = bpf_csum_diff(0, 0, (void*)scone, sizeof(*scone), udp->check);
-    udp->check = csum;
-
-    udp->check = 0; // TODO: Get UDP checksum update working.
+    if (udp->check != 0) {
+        udp->check = 0;
+        __u16 new_csum = udp_csum(ip, udp, new_data_end);
+        udp->check = new_csum;
+    }
 
     result = SCONE_ADDED_COUNTER;
     counters.increment(result);
@@ -302,10 +320,11 @@ int modify_scone_ebpf(struct xdp_md *ctx) {
     scone->rate_signal = 0x80 | ((scone->rate_signal & 0x7F)/2);
 
     // UDP checksum needs to be updated, if not zero.
-    u16 orig = (((u16)orig_rate_signal)<<8) |
-               ((scone->version & 0xFF000000)>>16);
-    u16 delta_csum = ((u16*)scone)[0] + ~orig;
-    udp->check = udp->check + ~delta_csum;
+    if (udp->check != 0) {
+        udp->check = 0;
+        __u16 new_csum = udp_csum(ip, udp, data_end);
+        udp->check = new_csum;
+    }
 
     result = SCONE_MODIFIED_COUNTER;
     counters.increment(result);
@@ -359,7 +378,11 @@ int remove_scone_ebpf(struct xdp_md *ctx) {
     udp = (void *)ip + sizeof(*ip);
     if ((void*)udp + sizeof(*udp) >= data_end) return XDP_ABORTED;
     udp->len = bpf_htons(bpf_ntohs(udp->len) - sizeof(struct sconepkt));
-    udp->check = 0; // TODO: Use real checksum.
+    if (udp->check != 0) {
+        udp->check = 0;
+        __u16 new_csum = udp_csum(ip, udp, data_end);
+        udp->check = new_csum;
+    }
 
     result = SCONE_REMOVED_COUNTER;
     counters.increment(result);
